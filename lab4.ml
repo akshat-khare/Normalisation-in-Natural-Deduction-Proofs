@@ -57,9 +57,17 @@ let rec setGamma minGaama proof = match proof with
 										)
 ;;
 exception InvalidGaama;;
-let rec subtractgaama gaamabig gaamasmall = match gaamabig with
+let rec findfirstdifference gaamabig gaamasmall = match gaamabig with
 | [] -> raise InvalidGaama
-| x::xs -> if(isMember x gaamasmall) then (subtractgaama xs gaamasmall) else x
+| x::xs -> if(isMember x gaamasmall) then (findfirstdifference xs gaamasmall) else x
+;;
+let rec removepropgaama prop gaama = match gaama with
+| [] -> []
+| x::xs -> if(isSameProp x prop) then (removepropgaama prop xs) else (x::(removepropgaama prop xs))
+;;
+let rec subtractgaama gaamabig gaamasmall = match gaamabig with
+| [] -> []
+| x::xs -> if(isMember x gaamasmall) then (subtractgaama xs gaamasmall) else(x::(subtractgaama xs gaamasmall))
 ;;
 exception Normalised;;
 
@@ -98,8 +106,8 @@ let isrpair proof = match proof with
 											| Eor -> (
 															let checkproof = hd childproof in
 															let checkrule = extractrule checkproof in
-															let propp = subtractgaama (extractgamma (hd (tl childproof))) gamma in
-															let propq = subtractgaama (extractgamma (hd (tl (tl childproof)))) gamma in
+															let propp = findfirstdifference (extractgamma (hd (tl childproof))) gamma in
+															let propq = findfirstdifference (extractgamma (hd (tl (tl childproof)))) gamma in
 															(match checkrule with
 															| Ileftor -> (
 																			let proxySameprop = extractprop (hd (extractchildproof checkproof)) in
@@ -114,24 +122,98 @@ let isrpair proof = match proof with
 											| _ -> false)
 ;;
 
+let rec listfinder f path l i= match l with
+| [] -> raise Normalised
+| x::xs -> (try
+				f x (path@[i])
+			with
+			| Normalised -> listfinder f path xs (i+1)
+		)
+;;
+
 let rec find_rpair_with_path proof path = match proof with
-| Rule (gamma, prop, rule, childproof) -> (match rule with
-											| Eimplies -> (
-															let checkproof = hd childproof in
-															let checkprop = extractprop checkproof in
-															(match childprop with
-															| Iimplies -> (
-																			let proxySameprop = extractprop (hd (extractchildproof checkproof)) in
-																			if(isSameProp prop proxySameprop)
-																				then (proof,path)
-																			else 
-																				()
-																			)
-															| _ -> expr2)
+| Rule (gamma, prop, rule, childproof) -> 
+											if(isrpair proof) then (
+												(path, proof)
+											)
+											else (
+												listfinder find_rpair_with_path path childproof 0
+											)
+;;
+
+let find_rpair proof = find_rpair_with_path proof [];;
+
+let rec graft pi2 propp pi1= match pi1 with
+| Rule (gamma, prop, rule, childproof) -> (
+											let newgaama = removepropgaama propp gamma in
+											match rule with
+											| Hyp -> (
+														if (isSameProp prop propp) 
+															then (
+																let delta = subtractgaama newgaama (extractgamma pi2) in
+																pad delta pi2
 															)
-											| Eleftand -> expr
-											| Erightand -> expr
-											| Eor -> expr
-											| _ -> expr2
+														else (
+															Rule(newgaama, prop, rule, [])
+														)
+													)
+											| _ -> Rule(newgaama, prop, rule, map (graft pi2 propp) childproof)
 										)
-| _ -> expr2
+;;
+
+let simplify1 proof = match proof with
+| Rule (gamma, prop, rule, childproof) -> (
+											match rule with
+											| Eimplies -> (
+															let pi2 = hd (tl childproof) in
+															let pi1 = hd (extractchildproof (hd childproof)) in
+															let propp = extractprop pi2 in
+															graft pi2 propp pi1
+															)
+											| Eleftand -> hd (extractchildproof (hd childproof))
+											| Erightand -> hd (tl ( extractchildproof (hd childproof)))
+											| Eor -> (
+														let checkproof = hd childproof in
+														let checkrule = extractrule checkproof in
+														(match checkrule with
+															| Ileftor -> (
+																			let pi1 = hd (tl childproof) in
+																			let pi2 = hd (extractchildproof checkproof) in
+																			let propp = extractprop pi2 in
+																			graft pi2 propp pi1
+																			)
+															| Irightor -> (
+																			let pi1 = hd (tl (tl childproof)) in
+																			let pi2 = hd (extractchildproof checkproof) in
+																			let propp = extractprop pi2 in
+																			graft pi2 propp pi1
+																			)
+															| _ -> raise InvalidProof
+														)
+													)
+											| _ -> raise InvalidProof
+											)
+;;
+
+let rec findandreplace path stuff proof = match proof with
+| Rule (gamma, prop, rule, childproof) -> (
+											match path with
+											| [] -> stuff
+											| x::xs -> Rule(gamma, prop, rule, mapi (
+															fun i a -> if(x=i) then (findandreplace xs stuff a) else a
+														) childproof)
+											)
+;;
+
+let rec normalise proof = try
+	let findresult = find_rpair proof in
+	(match findresult with
+	| (a,b) -> (
+					let simplified = simplify1 b in
+					let newproof = findandreplace a simplified proof in
+					normalise newproof
+				)
+)
+with
+| Normalised -> proof
+;;
